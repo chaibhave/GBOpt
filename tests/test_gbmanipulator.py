@@ -128,6 +128,22 @@ class TestGBManipulator(unittest.TestCase):
         self.assertEqual(
             manipulator3.parents[0].gb_thickness, manipulator3.parents[1].gb_thickness)
 
+    def test_parent_type_dict_not_shared_between_instances(self):
+        unit_cell = UnitCell()
+        unit_cell.init_by_structure(self.structure, self.a0, self.atom_types)
+        parent_with_labels = Parent(
+            "tests/inputs/lammps_input_with_labels.txt",
+            unit_cell=unit_cell,
+            gb_thickness=self.gb_thickness,
+        )
+        parent_without_labels = Parent(
+            "tests/inputs/lammps_input_without_labels.txt",
+            unit_cell=unit_cell,
+            gb_thickness=self.gb_thickness,
+        )
+        self.assertEqual(parent_with_labels.whole_system["name"][0], "Cu")
+        self.assertEqual(parent_without_labels.whole_system["name"][0], "H")
+
     def test_grain_translation(self):
         new_system = self.manipulator_tilt.translate_right_grain(1.0, 0.5)
         self.assertTrue(np.allclose(self.tilt.whole_system['x'], new_system['x']))

@@ -195,17 +195,16 @@ class Atom:
             type_map = {name: idx + 1 for idx, name in enumerate(set(names))}
         else:
             if not isinstance(type_map, dict):
-                return AtomTypeError(
+                raise AtomTypeError(
                     "Invalid type for type_map: must be of type dict[str, int]: "
-                    f"{type_map}"
-                )
+                    f"{type_map}")
             if not (
                 all(isinstance(key, str) for key in type_map.keys()) and
                 all(isinstance(val, int) for val in type_map.values())
             ):
                 raise AtomTypeError(
                     "Invalid type for type_map: must be of type dict[str, int]: "
-                    "f{type_map}"
+                    f"{type_map}"
                 )
             if not min(type_map.values()) == 1:
                 raise AtomValueError("Minimum type value must be 1 in type_map.")

@@ -277,7 +277,7 @@ class UnitCell:
     def init_by_custom(self, unit_cell: np.ndarray,
                        unit_cell_types: str | Sequence[str], a0: float,
                        conventional: np.ndarray, reciprocal: np.ndarray,
-                       ideal_bond_lengths: dict, ratio: dict[int, int] = {1: 1},
+                       ideal_bond_lengths: dict, ratio: dict[int, int] | None = None,
                        type_map: Union[dict[int, str], dict[str, int]] = None) -> None:
         """
         Initialize the UnitCell with a custom-built lattice.
@@ -311,6 +311,8 @@ class UnitCell:
         else:
             cell_types = unit_cell_types
 
+        if ratio is None:
+            ratio = {1: 1}
         if not isinstance(ratio, dict):
             raise UnitCellTypeError(
                 "The 'ratio' dict must be a dict of positive ints."
@@ -370,7 +372,7 @@ class UnitCell:
         """Returns an array containing the types of atoms in the UnitCell."""
         if asint:
             names = [a.name for a in self.__unit_cell]
-            return np.hstack([self.type_map[name] for name in names], dtype=int)
+            return np.array([self.type_map[name] for name in names], dtype=int)
         else:
             return np.hstack([a.name for a in self.__unit_cell])
 
