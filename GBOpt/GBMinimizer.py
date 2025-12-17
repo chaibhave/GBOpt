@@ -1,12 +1,15 @@
 # Copyright 2025, Battelle Energy Alliance, LLC, ALL RIGHTS RESERVED
 
-import numpy as np
-from GBOpt import GBMaker, GBManipulator
 import math
-import uuid
-from time import time
-import sys
 import shutil
+import sys
+import uuid
+from collections.abc import Callable
+from time import time
+
+import numpy as np
+
+from GBOpt import GBMaker, GBManipulator
 
 
 class Mutator:
@@ -57,7 +60,7 @@ class MonteCarloMinimizer:
     :param seed: The seed to initialize the numpy.random.default_rng with.
     """
 
-    def __init__(self, GB: GBMaker, gb_energy_func: callable, choices: list, seed=time()):
+    def __init__(self, GB: GBMaker, gb_energy_func: Callable, choices: list, seed=time()):
         self.GB = GB
         self.gb_energy_func = gb_energy_func
         self.manipulator = GBManipulator(self.GB)
@@ -156,3 +159,239 @@ class MonteCarloMinimizer:
             T *= cooldown_rate
 
         return min_gbe
+
+
+class GeneticAlgorithmMinimizer:
+    """
+    Minimizer class for finding the lowest energy configuration of a grain boundary
+    using a simple genetic algorithm (GA).
+    Mirrors the interface of MonteCarloMinimizer while using GA operations to explore
+    the configuration space.
+    """
+
+    def __init__(self, GB: GBMaker, gb_energy_func: Callable, choices: list, seed=time(), *, population_size: int = 20, generations: int = 50, keep_top_pct: int = 10, intermediate_pct: int = 60, gb_batch_energy_func: Callable | None = None):
+        """
+        :param GB: GBMaker object to perform minimization on.
+        :param gb_energy_func: Function that returns the energy of a GB structure. It must be callable with
+            (GBMaker, GBManipulator, atom_positions, unique_id).
+        :param choices: List of strings corresponding to GBManipulator operations. Used to configure the Mutator.
+        :param seed: Seed for numpy.random.default_rng. Keyword argument, optional, defaults to the current time.
+        :param population_size: Number of candidates per generation. Keyword argument, optional, defaults to 20.
+        :param generations: Number of generations to iterate. Keyword argument, optional, defaults to 50.
+        :param keep_top_pct: Percentage of lowest-energy structures carried over unchanged. Keyword argument, optional,
+            defaults to 10.
+        :param intermediate_pct: Percentage of structures eligible for crossover/mutation selection. Keyword argument,
+            optional, defaults to 60.
+        :param gb_batch_energy_func: Optional batch-evaluation function for processing a population in one call. It
+            should accept (GBMaker, manipulators, atom_positions_list, lineages, unique_ids) and return a list of
+            dictionaries containing at least ``"energy"`` and ``"final_dump"`` keys. If not provided, fall back to
+            calling ``gb_energy_func`` per candidate.
+        """
+        self.GB = GB
+        self.gb_energy_func = gb_energy_func
+        self.gb_batch_energy_func = gb_batch_energy_func
+        self.manipulator = GBManipulator(self.GB)
+        self.mutator = Mutator(choices, self.manipulator)
+        self.local_random = np.random.default_rng(seed)
+        self.manipulator.rng = self.local_random
+        self.population_size = population_size
+        self.generations = generations
+        self.keep_top_pct = keep_top_pct
+        self.intermediate_pct = intermediate_pct
+        self.GBE_vals = []
+
+    def _make_manipulator_from_file(self, filename: str) -> GBManipulator:
+        manipulator = GBManipulator(
+            filename,
+            unit_cell=self.GB.unit_cell,
+            gb_thickness=self.GB.gb_thickness,
+        )
+        manipulator.rng = self.local_random
+        return manipulator
+
+    def _select_indices_by_energy(self, energies: list) -> tuple[list[int], list[int]]:
+        idx_sorted = sorted(range(len(energies)), key=lambda i: energies[i])
+
+        n_top = max(0, (len(energies) * self.keep_top_pct) // 100)
+        n_inter = max(0, (len(energies) * self.intermediate_pct) // 100)
+
+        lowest_top = idx_sorted[:n_top]
+        intermediate = idx_sorted[:n_inter]
+        return lowest_top, intermediate
+
+    def _evaluate_generation(self, population_manipulators: list[GBManipulator], population_structures: list[np.ndarray],
+                             population_lineages: list[list[str]], gen: int, unique_id: int) -> tuple[list[float], list[str], list[GBManipulator]]:
+        """Evaluate all candidates, optionally using a batch energy function."""
+        if self.gb_batch_energy_func is not None:
+            batch_results = self.gb_batch_energy_func(
+                self.GB,
+                population_manipulators,
+                population_structures,
+                population_lineages,
+                [f"GA_{unique_id}_g{gen}_c{i}" for i in range(
+                    len(population_structures))],
+            )
+
+            gen_energies = []
+            gen_files = []
+            evaluated_manipulators = []
+            for result in batch_results:
+                gen_energies.append(result["energy"])
+                gen_files.append(result["final_dump"])
+                evaluated_manipulators.append(
+                    self._make_manipulator_from_file(result["final_dump"]))
+
+            return gen_energies, gen_files, evaluated_manipulators
+
+        gen_energies = []
+        gen_files = []
+        evaluated_manipulators = []
+
+        for idx, (manipulator, atom_positions) in enumerate(zip(population_manipulators, population_structures)):
+            gbe, dump_file_name = self.gb_energy_func(
+                self.GB,
+                manipulator,
+                atom_positions,
+                f"GA_{unique_id}_g{gen}_c{idx}",
+            )
+
+            gen_energies.append(gbe)
+            gen_files.append(dump_file_name)
+            new_manip = self._make_manipulator_from_file(dump_file_name)
+            evaluated_manipulators.append(new_manip)
+
+        return gen_energies, gen_files, evaluated_manipulators
+
+    def _make_next_generation(self, files: list[str], intermediate_indices: list[int]) -> tuple[list[GBManipulator], list[np.ndarray], list[list[str]]]:
+        candidates: list[np.ndarray] = []
+        manipulators: list[GBManipulator] = []
+        lineages: list[list[str]] = []
+
+        N_slice = self.population_size // 2
+        N_mutate = self.population_size - N_slice
+
+        # Slice & merge
+        for _ in range(N_slice):
+            replace = len(intermediate_indices) < 2
+            idx_1, idx_2 = self.local_random.choice(
+                intermediate_indices, size=2, replace=replace)
+            p1, p2 = files[idx_1], files[idx_2]
+            new_manip = GBManipulator(
+                p1,
+                p2,
+                unit_cell=self.GB.unit_cell,
+                gb_thickness=self.GB.gb_thickness,
+            )
+            new_manip.rng = self.local_random
+            new_struct = new_manip.slice_and_merge()
+
+            candidates.append(new_struct)
+            manipulators.append(new_manip)
+            lineages.append([p1, p2])
+
+        # Mutations
+        if not intermediate_indices:
+            intermediate_indices = list(range(len(files)))
+        choices = self.local_random.choice(
+            intermediate_indices, size=N_mutate, replace=True)
+        for idx in choices:
+            parent = files[idx]
+            new_manip = GBManipulator(
+                parent,
+                unit_cell=self.GB.unit_cell,
+                gb_thickness=self.GB.gb_thickness,
+            )
+            new_manip.rng = self.local_random
+            new_struct = self.mutator.mutate(
+                local_random=self.local_random,
+                GB=self.GB,
+                manipulator=new_manip,
+            )
+
+            candidates.append(new_struct)
+            manipulators.append(new_manip)
+            lineages.append([parent])
+
+        return manipulators, candidates, lineages
+
+    def run_GA(self, unique_id: int = uuid.uuid4()) -> tuple[float, str]:
+        """
+        Runs a genetic algorithm loop on the grain boundary structure.
+
+        :param unique_id: Unique unsigned integer to which to label all files generated by the GA run.
+        :return: Tuple containing the minimum energy value observed and the associated dump filename.
+        """
+
+        # Evaluate the initial structure
+        init_gbe, init_dump = self.gb_energy_func(
+            self.GB,
+            self.manipulator,
+            self.manipulator.parents[0].whole_system,
+            "GA_initial"+str(unique_id),
+        )
+        self.GBE_vals.append([init_gbe])
+
+        best_energy = init_gbe
+        best_dump = init_dump
+
+        base_parent = init_dump
+        population_manipulators = []
+        population_structures = []
+        population_lineages = []
+
+        for _ in range(self.population_size):
+            candidate_manip = self._make_manipulator_from_file(base_parent)
+            candidate_struct = self.mutator.mutate(
+                local_random=self.local_random,
+                GB=self.GB,
+                manipulator=candidate_manip,
+            )
+            population_manipulators.append(candidate_manip)
+            population_structures.append(candidate_struct)
+            population_lineages.append([base_parent])
+
+        # Main GA loop
+        for gen in range(self.generations):
+            gen_energies, gen_files, evaluated_manipulators = self._evaluate_generation(
+                population_manipulators,
+                population_structures,
+                population_lineages,
+                gen,
+                unique_id,
+            )
+
+            for gbe, dump_file_name in zip(gen_energies, gen_files):
+                if gbe < best_energy:
+                    best_energy = gbe
+                    best_dump = dump_file_name
+
+            self.GBE_vals.append(gen_energies)
+
+            # Selection
+            lowest_idxs, inter_idxs = self._select_indices_by_energy(gen_energies)
+
+            # Carry over lowest energies
+            next_manipulators = []
+            next_structures = []
+            next_lineages = []
+            for idx in lowest_idxs:
+                manip = evaluated_manipulators[idx]
+                next_manipulators.append(manip)
+                next_structures.append(manip.parents[0].whole_system)
+                next_lineages.append([gen_files[idx]])
+
+            # Build the remainder of the next generation
+            carryover_files = gen_files
+            new_manips, new_structs, new_lineages = self._make_next_generation(
+                carryover_files,
+                inter_idxs,
+            )
+            next_manipulators.extend(new_manips)
+            next_structures.extend(new_structs)
+            next_lineages.extend(new_lineages)
+
+            population_manipulators = next_manipulators[:self.population_size]
+            population_structures = next_structures[:self.population_size]
+            population_lineages = next_lineages[:self.population_size]
+
+        return best_energy, best_dump
