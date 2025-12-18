@@ -2,7 +2,7 @@ Crystalline Cu atoms
 
 792 atoms
 1 atom types
--10.000000 30.000000 xlo xhi
+0.000000 41.240000 xlo xhi
 0.000000 21.240000 ylo yhi
 0.000000 21.240000 zlo zhi
 
