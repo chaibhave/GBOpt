@@ -623,7 +623,8 @@ class GBMaker:
         # Write LAMMPS data file
         with open(file_name, "w") as fdata:
             # First line is a comment line
-            fdata.write(f"Crystalline {"".join(np.unique(atoms["name"]))} atoms\n\n")
+            atom_labels = "".join(np.unique(atoms["name"]))
+            fdata.write(f"Crystalline {atom_labels} atoms\n\n")
 
             # --- Header ---#
             # Specify number of atoms and atom types

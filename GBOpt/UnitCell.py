@@ -570,8 +570,8 @@ class UnitCell:
             f"Could not find {nn} unique neighbor distances within {rcut=}")
 
     def __repr__(self):
-        structure_info = f"UnitCell with {len(self.__unit_cell)} " + \
-            f"atom{"s" if len(self.__unit_cell) != 1 else ""}"
+        atom_plural = "s" if len(self.__unit_cell) != 1 else ""
+        structure_info = f"UnitCell with {len(self.__unit_cell)} atom{atom_plural}"
         lattice_info = f"Lattice parameter (a0): {self.__a0:.3f} Å"
         radius_info = f"Radius: {self.__radius:.3f} Å"
         atom_info = ", ".join(
