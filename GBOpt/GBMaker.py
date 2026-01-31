@@ -3,13 +3,13 @@
 
 import math
 import warnings
-from fractions import Fraction
 from numbers import Number
 from typing import Any, Sequence, Tuple, Union
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from GBOpt.GBSpacingCalculator import GBSpacingCalculator
 from GBOpt.UnitCell import UnitCell
 
 
@@ -111,109 +111,7 @@ class GBMaker:
         :param precision: Decimal precision to use during calculations, defaults to 5
         :return: Integer approximation of the rotation matrix m
         """
-        # first round the matrix to the desired precision
-        R0 = np.linalg.norm(Rotation.from_matrix(m).as_rotvec(degrees=True))
-
-        def gcd_reduce(matrix):
-            gcds = np.gcd.reduce(matrix, axis=1)
-            return matrix / gcds[:, np.newaxis]
-
-        def get_angle(matrix):
-            return np.linalg.norm(
-                Rotation.from_matrix(
-                    matrix / np.linalg.norm(matrix, axis=1)[:, np.newaxis]
-                ).as_rotvec(degrees=True)
-            )
-
-        def get_magnitude_sum(matrix):
-            abs_m = np.abs(matrix)
-            non_zero_elements = abs_m[abs_m > 0]
-            log_magnitudes = np.log(non_zero_elements)
-            return np.sum(log_magnitudes)
-
-        def calculate_best_approx(metrics1, metrics2, m1, m2):
-            diffs = [metrics1["angle"], metrics2["angle"]]
-            keys = list(metrics1.keys())
-
-            # Normalize each metric. Note that the if statement essentially only catches
-            # when both matrices gives essentially the same rotation as the original
-            # (as calculated by the get_angle function above).
-            metric1_norms = np.array(
-                [
-                    metrics1[key] / max(metrics1[key], metrics2[key])
-                    if not max(metrics1[key], metrics2[key]) == 0
-                    else 0
-                    for key in keys
-                ]
-            )
-            metric2_norms = np.array(
-                [
-                    metrics2[key] / max(metrics1[key], metrics2[key])
-                    if not max(metrics1[key], metrics2[key]) == 0
-                    else 0
-                    for key in keys
-                ]
-            )
-
-            # These weights *seem* to work, but there should be a better way to
-            # determine these (these were determine through trial and error for the
-            # R_right matrix for the misorientation matrix of [0.3, 0.4, 0.5, 0.6, 0.7])
-            # In a general sense, placing most of the weighting on the magnitude, then
-            # most of the rest on the condition, with the rest on the angle should give
-            # a good representation, at least based on the generated matrix mentioned.
-            weights = {"angle": 0.1, "condition": 0.3, "magnitude": 0.6}
-            weights = np.array([weights[key] for key in keys])  # keep order the same
-            metric1_overall = np.sum(metric1_norms * weights) / np.sum(weights)
-            metric2_overall = np.sum(metric2_norms * weights) / np.sum(weights)
-
-            if metric1_overall < metric2_overall:
-                return m1, diffs[0]
-            else:
-                return m2, diffs[1]
-
-        # Approximation with the least common multiple of denominators in their
-        # fraction representation
-        m_as_fractions = np.vectorize(
-            lambda val: Fraction(val).limit_denominator(10**precision)
-        )(m)
-        denominators = np.array(
-            [[f.denominator for f in row] for row in m_as_fractions]
-        )
-        scaling_factors = np.array([np.lcm.reduce(row) for row in denominators])
-        scaled_matrix = m * scaling_factors[:, np.newaxis]
-        approx_m_from_fractions = gcd_reduce(np.round(scaled_matrix).astype(int))
-        approx_m_from_fractions_metrics = {
-            "angle": abs(R0-get_angle(approx_m_from_fractions)),
-            "condition": np.linalg.cond(approx_m_from_fractions),
-            "magnitude": get_magnitude_sum(approx_m_from_fractions)
-        }
-
-        # Approximation by taking the ratio of the row values divided by the smallest
-        # values, scaling these ratios up by 10**precision, truncating the values,
-        # then simplifying.
-        min_by_row_excluding_0 = np.ma.amin(
-            np.ma.masked_less(np.abs(m), 10**-precision), axis=1).data
-        m_ratio = m / min_by_row_excluding_0[:, np.newaxis]  # ratios of values to mins
-        m_rounded = np.round(m_ratio, precision)  # round to the desired precision
-        m_scaled = (10**precision * m_rounded).astype(int)  # scale by 10**precision
-        approx_m_from_scaling = gcd_reduce(m_scaled)
-        approx_m_from_scaling_metrics = {
-            "angle": abs(R0-get_angle(approx_m_from_scaling)),
-            "condition": np.linalg.cond(approx_m_from_scaling),
-            "magnitude": get_magnitude_sum(approx_m_from_scaling)
-        }
-
-        result, diff = calculate_best_approx(
-            approx_m_from_fractions_metrics,
-            approx_m_from_scaling_metrics,
-            approx_m_from_fractions,
-            approx_m_from_scaling
-        )
-
-        if diff > 0.5:
-            warnings.warn(
-                "Approximated rotation matrix error is greater than 0.5 degrees.")
-        return result.astype(int)
+        return GBSpacingCalculator.approximate_rotation_matrix_as_int(m, precision)
 
     def __assign_orientations(self, misorientation: np.ndarray) -> None:
         """
@@ -266,52 +164,16 @@ class GBMaker:
         if threshold is None:
             threshold = self.__a0 * 15
 
-        # approximate the rotation matrix as integers
-        R_left = self.__Rincl
-        R_right = np.dot(self.__Rmis, self.__Rincl)
-        # # We store the approximate matrices as objects to allow for large numbers
-        R_left_approx = self.__approximate_rotation_matrix_as_int(R_left).astype(object)
-        R_right_approx = self.__approximate_rotation_matrix_as_int(R_right).astype(
-            object
+        # Use the GBSpacingCalculator to compute spacing
+        misorientation = np.hstack((self.__misorientation, self.__inclination))
+        spacing = GBSpacingCalculator.calculate_periodic_spacing(
+            self.__a0, misorientation, self.__x_dim_min, threshold
         )
 
-        # The periodic distance in each direction is the lattice parameter multiplied by
-        # norm of the Miller indices in that direction. This is determined using the
-        # usual formula for the interplanar spacing: d = a / sqrt(h**2+k**2+l**2). The
-        # square of the denominator here is the number of planes needed before
-        # periodicity. Thus, if we multiply that distance by the interplanar spacing we
-        # will get the interplanar spacing. This simplifies to
-        # (a0**2/d**2)*d = a0**2/d --> spacing = a0 * sqrt(h**2+k**2+l**2)
-        spacing_left = {
-            axis: self.__a0 * np.linalg.norm(vec)
-            for axis, vec in zip(["x", "y", "z"], R_left_approx)
-        }
-        spacing_right = {
-            axis: self.__a0 * np.linalg.norm(vec)
-            for axis, vec in zip(["x", "y", "z"], R_right_approx)
-        }
-
-        spacing = {"x": {"left": spacing_left["x"], "right": spacing_right["x"]}}
-        self.__left_x = math.ceil(
-            self.__x_dim_min / spacing["x"]["left"]) * spacing["x"]["left"]
-        self.__right_x = math.ceil(
-            self.__x_dim_min / spacing["x"]["right"]) * spacing["x"]["right"]
-        self.__x_dim = self.__left_x + self.__right_x
-        spacing.update(
-            {
-                axis: max(spacing_left[axis], spacing_right[axis])
-                for axis in ["y", "z"]
-            }
-        )
-
-        warnings.simplefilter("once", UserWarning)
-        for key, val in spacing.items():
-            if key == 'x':
-                continue
-            if threshold < val:
-                spacing[key] = threshold
-                warnings.warn("Resulting boundary is non-periodic.")
-        warnings.simplefilter("default", UserWarning)
+        # Update instance variables
+        self.__left_x = spacing["left_x"]
+        self.__right_x = spacing["right_x"]
+        self.__x_dim = spacing["x_dim"]
 
         return spacing
 
