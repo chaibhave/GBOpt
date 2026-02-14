@@ -117,6 +117,18 @@ class TestAtom(unittest.TestCase):
         self.assertTrue(converted_atoms3.dtype == Atom.atom_dtype)
         self.assertTrue(all([i == j] for i, j in zip(atoms, converted_atoms3)))
 
+    def test_as_array_invalid_type_map(self):
+        atoms = np.array(
+            [
+                ("Cu", 0.0, 0.0, 0.0),
+                ("Ag", 1.0, 1.0, 1.0)
+            ],
+            dtype=Atom.atom_dtype
+        )
+        with self.assertRaises(AtomTypeError) as exc:
+            Atom.as_array(atoms, type_map=["not", "a", "dict"])
+        self.assertIn("Invalid type for type_map", str(exc.exception))
+
     def test_setters(self):
         atom = Atom("H", 0.0, 0.0, 0.0)
         atom.atom_name = "He"

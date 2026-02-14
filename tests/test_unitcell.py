@@ -424,6 +424,30 @@ class TestUnitCell(unittest.TestCase):
         cell.type_map = custom_type_map
         self.assertEqual(cell.type_map, custom_type_map)
 
+    def test_init_by_custom_ratio_not_shared_between_calls(self):
+        cell = UnitCell()
+        custom_unit_cell = np.array([[0.0, 0.0, 0.0]])
+        lattice_vectors = np.array(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        )
+        custom_ideal_bonds = {(1, 1): 1}
+        cell.init_by_custom(unit_cell=custom_unit_cell,
+                            unit_cell_types='H',
+                            a0=1.0,
+                            conventional=lattice_vectors,
+                            reciprocal=lattice_vectors,
+                            ideal_bond_lengths=custom_ideal_bonds)
+        cell.ratio[1] = 3
+        self.assertEqual(cell.ratio[1], 3)
+
+        cell.init_by_custom(unit_cell=custom_unit_cell,
+                            unit_cell_types='H',
+                            a0=1.0,
+                            conventional=lattice_vectors,
+                            reciprocal=lattice_vectors,
+                            ideal_bond_lengths=custom_ideal_bonds)
+        self.assertEqual(cell.ratio, {1: 1})
+
     def test_not_implemented_structure(self):
         cell = UnitCell()
         with self.assertRaises(NotImplementedError):
@@ -528,13 +552,16 @@ class TestUnitCell(unittest.TestCase):
     def test_names_as_ints(self):
         cell = UnitCell()
         cell.init_by_structure(structure='fcc', a0=1.0, atoms='Cu')
-        self.assertTrue(np.allclose(cell.names(asint=True),
-                        np.array([1, 1, 1, 1], dtype=int)))
+        names_as_ints = cell.names(asint=True)
+        self.assertTrue(np.allclose(names_as_ints, np.array([1, 1, 1, 1], dtype=int)))
+        self.assertTrue(np.issubdtype(names_as_ints.dtype, np.integer))
 
         cell.init_by_structure(
             "fluorite", 5.52, ["Ca", "F"], type_map={"Ca": 2, "F": 1})
-        self.assertTrue(all(cell.names(asint=True) == [
+        fluorite_ints = cell.names(asint=True)
+        self.assertTrue(all(fluorite_ints == [
                         2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1]))
+        self.assertTrue(np.issubdtype(fluorite_ints.dtype, np.integer))
 
     def test_setter(self):
         cell = UnitCell()

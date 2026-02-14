@@ -115,8 +115,10 @@ class Parent:
         *,
         unit_cell: UnitCell = None,
         gb_thickness: float = 10,
-        type_dict: dict = {}
+        type_dict: dict | None = None
     ) -> None:
+        if type_dict is None:
+            type_dict = {}
         if isinstance(system, GBMaker):
             self.__init_by_gbmaker(system)
         else:
@@ -171,7 +173,7 @@ class Parent:
         system_file: str,
         unit_cell: UnitCell,
         gb_thickness: float,
-        type_dict: dict
+        type_dict: dict | None
     ) -> None:
         """
         Method for initializing the Parent using a file.
@@ -193,6 +195,8 @@ class Parent:
             raise ParentValueError("Unit cell must be specified for files")
         self.__unit_cell = unit_cell
         self.__gb_thickness = gb_thickness
+        if type_dict is None:
+            type_dict = {}
         if not isfile(system_file):
             raise ParentFileNotFoundError(f"{system_file} does not exist.")
         # We need to first identify what type of file it is. Since filenames can be just
@@ -247,7 +251,7 @@ class Parent:
         system_file: str,
         unit_cell: UnitCell,
         gb_thickness: float,
-        type_dict: dict,
+        type_dict: dict | None,
     ) -> None:
         """
         Method for initializing the Parent using a LAMMPS dump file.
@@ -265,6 +269,8 @@ class Parent:
         :raises ParentFileMissingDataError: Exception raised if the file is otherwise
             formatted correctly, but is missing required data.
         """
+        if type_dict is None:
+            type_dict = {}
         skip_rows = 0
         with open(system_file) as f:
             line = f.readline()
@@ -374,7 +380,7 @@ class Parent:
         system_file: str,
         unit_cell: UnitCell,
         gb_thickness: float,
-        type_dict: dict,
+        type_dict: dict | None,
     ) -> None:
         """
         Method for initializing the Parent using a LAMMPS input file.
@@ -392,9 +398,10 @@ class Parent:
         :raises ParentFileMissingDataError: Exception raised if the file is otherwise
             formatted correctly, but is missing required data.
         """
+        if type_dict is None:
+            type_dict = {}
         n_atoms = n_types = 0
         x_dims = y_dims = z_dims = []
-        type_dict = {}
         skiprows = 0
 
         with open(system_file) as f:
